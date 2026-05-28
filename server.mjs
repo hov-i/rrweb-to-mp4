@@ -4,7 +4,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdir, rm } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { normalizeEvents, convertEvents } from './core.mjs'
+import { normalizeEvents, convertEventsSegmented } from './core.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -12,9 +12,10 @@ const PORT = Number(process.env.PORT) || 3000
 
 const jobs = new Map()
 
-const MAX_SESSION_MS = 15 * 60 * 1000
-const MIN_SPEED = 4
 const MAX_CONCURRENT_JOBS = 1
+// 세그먼트 변환으로 RAM은 길이와 무관하게 일정해지므로 hard cap만 남김 (남용/오작동 방지용 안전선)
+const HARD_MAX_SESSION_MS = 60 * 60 * 1000
+const SEGMENT_MS = 10 * 60 * 1000
 
 function countRunningJobs() {
   let n = 0
@@ -47,7 +48,7 @@ app.post(
         return res.status(429).json({ error: '다른 변환이 진행 중입니다. 잠시 후 다시 시도해주세요.' })
       }
 
-      const speed = Math.max(MIN_SPEED, Math.min(32, parseFloat(req.query.speed ?? '4')))
+      const speed = Math.max(1, Math.min(32, parseFloat(req.query.speed ?? '4')))
       const scale = Math.max(0.25, Math.min(1, parseFloat(req.query.scale ?? '0.75')))
       const filename = (req.query.filename || 'replay').toString().replace(/[^\w\-]+/g, '_')
 
@@ -67,9 +68,9 @@ app.post(
       }
 
       const sessionMs = events[events.length - 1].timestamp - events[0].timestamp
-      if (sessionMs > MAX_SESSION_MS) {
+      if (sessionMs > HARD_MAX_SESSION_MS) {
         return res.status(413).json({
-          error: `세션이 너무 깁니다. 최대 ${MAX_SESSION_MS / 60000}분까지 지원합니다. (입력: ${(sessionMs / 60000).toFixed(1)}분)`,
+          error: `세션이 너무 깁니다. 최대 ${HARD_MAX_SESSION_MS / 60000}분까지 지원합니다. (입력: ${(sessionMs / 60000).toFixed(1)}분)`,
         })
       }
 
@@ -95,11 +96,13 @@ app.post(
 
       res.json({ jobId: id })
 
-      convertEvents({
+      convertEventsSegmented({
         events,
         outPath,
         speed,
         scale,
+        segmentMs: SEGMENT_MS,
+        workDir: jobDir,
         onInit: (e) => {
           job.lastInit = { type: 'init', ...e }
           pushEvent(job, job.lastInit)

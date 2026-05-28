@@ -3,6 +3,11 @@
 # 확인: `npm ls playwright` 또는 node_modules/playwright/package.json
 FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 
+# 세그먼트 변환 후 ffmpeg concat / -ss trim 에 사용. Playwright 이미지에 ffmpeg가
+# 번들돼 있긴 하나 PATH 안정성을 위해 명시적으로 설치.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package*.json ./
