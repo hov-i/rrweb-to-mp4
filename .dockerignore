@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+.git
+.gitignore
+.env*
+.vercel
+__rrvideo__temp__
+*.mp4
+*.json.bak
+README.md

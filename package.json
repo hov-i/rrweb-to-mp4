@@ -1,0 +1,15 @@
+{
+  "name": "rrweb-to-mp4",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "cli": "node convert.mjs"
+  },
+  "dependencies": {
+    "express": "4.21.1",
+    "rrvideo": "2.0.0-alpha.20"
+  }
+}

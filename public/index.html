@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sentry Replay → MP4</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0;
+        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #0b0d12; color: #e7e9ee; min-height: 100vh;
+      }
+      main { max-width: 720px; margin: 0 auto; padding: 64px 24px; }
+      h1 { font-size: 32px; margin: 0 0 8px; }
+      .sub { color: #9aa3b2; margin: 0 0 32px; font-size: 14px; line-height: 1.5; }
+      .controls {
+        display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
+        padding: 16px; background: #10131a;
+        border: 1px solid #1f2430; border-radius: 12px;
+      }
+      .controls label { display: block; }
+      .controls .lbl { font-size: 12px; color: #9aa3b2; margin-bottom: 6px; }
+      .controls select {
+        width: 100%; background: #0b0d12; color: #e7e9ee;
+        border: 1px solid #2a2f3a; border-radius: 8px;
+        padding: 8px 10px; font-size: 14px;
+      }
+      .drop {
+        display: block; margin-top: 16px;
+        border: 2px dashed #2a2f3a; background: #10131a;
+        border-radius: 16px; padding: 56px 24px; text-align: center;
+        transition: all .15s; cursor: pointer;
+      }
+      .drop.over { border-color: #7c9cff; background: #161a24; }
+      .drop.busy { cursor: progress; opacity: .7; }
+      .drop input { display: none; }
+      .drop .title { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+      .drop .hint { color: #7c8597; font-size: 14px; }
+      .status { margin-top: 24px; min-height: 80px; font-size: 14px; }
+      .row { margin-bottom: 6px; }
+      .row.err { color: #ff8a8a; }
+      .row.ok { color: #7be39a; }
+      .bar {
+        margin-top: 8px; height: 6px; background: #1a1f2a;
+        border-radius: 999px; overflow: hidden;
+      }
+      .bar > div {
+        height: 100%; width: 0%;
+        background: linear-gradient(90deg, #7c9cff, #6be3c1);
+        transition: width .3s linear;
+      }
+      .log {
+        margin-top: 12px; font-size: 12px; color: #5e6675;
+        max-height: 80px; overflow: auto; white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Sentry Replay → MP4</h1>
+      <p class="sub">
+        rrweb JSON 파일 드롭 → Sentry 팀 공식 도구인
+        <code>@rrweb/rrvideo</code> (Playwright + rrweb)로 변환.
+        결과 비디오는 선택한 배속으로 재생됩니다.
+      </p>
+
+      <section class="controls">
+        <label>
+          <div class="lbl">비디오 재생 속도</div>
+          <select id="speed">
+            <option value="1">1x (원래 속도, 변환 오래걸림)</option>
+            <option value="2">2x</option>
+            <option value="4" selected>4x (추천)</option>
+            <option value="8">8x</option>
+            <option value="16">16x</option>
+          </select>
+        </label>
+        <label>
+          <div class="lbl">해상도</div>
+          <select id="scale">
+            <option value="0.5">50%</option>
+            <option value="0.75" selected>75%</option>
+            <option value="1">100%</option>
+          </select>
+        </label>
+      </section>
+
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="application/json,.json" />
+        <div class="title">JSON 파일 드롭하거나 클릭해서 선택</div>
+        <div class="hint">변환이 끝나면 자동으로 다운로드됩니다.</div>
+      </label>
+
+      <section class="status" id="status"></section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const drop = $('drop')
+      const fileInput = $('file')
+      const statusEl = $('status')
+
+      drop.addEventListener('dragover', (e) => {
+        e.preventDefault()
+        drop.classList.add('over')
+      })
+      drop.addEventListener('dragleave', () => drop.classList.remove('over'))
+      drop.addEventListener('drop', (e) => {
+        e.preventDefault()
+        drop.classList.remove('over')
+        const f = e.dataTransfer.files?.[0]
+        if (f) upload(f)
+      })
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files[0]) upload(fileInput.files[0])
+        fileInput.value = ''
+      })
+
+      let busy = false
+      let logLines = []
+
+      async function upload(file) {
+        if (busy) return
+        busy = true
+        drop.classList.add('busy')
+        logLines = []
+
+        statusEl.innerHTML = ''
+        const baseName = file.name.replace(/\.json$/i, '') || 'replay'
+        const params = new URLSearchParams({
+          speed: $('speed').value,
+          scale: $('scale').value,
+          filename: baseName,
+        })
+
+        try {
+          renderStatus({ phase: 'uploading', msg: `⏫ ${(file.size / 1024 / 1024).toFixed(1)} MB 업로드 중…` })
+          const r = await fetch('/jobs?' + params, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file,
+          })
+          const data = await r.json()
+          if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`)
+
+          await streamJob(data.jobId, baseName)
+        } catch (e) {
+          renderStatus({ phase: 'error', msg: '⚠ ' + (e.message || e) })
+        } finally {
+          busy = false
+          drop.classList.remove('busy')
+        }
+      }
+
+      function streamJob(jobId, baseName) {
+        return new Promise((resolve) => {
+          const es = new EventSource(`/jobs/${jobId}/events`)
+
+          es.onmessage = (msg) => {
+            let evt
+            try { evt = JSON.parse(msg.data) } catch { return }
+
+            if (evt.type === 'init') {
+              renderStatus({
+                phase: 'init',
+                msg: `🎬 ${evt.srcW}×${evt.srcH} · 세션 ${(evt.totalMs / 1000).toFixed(1)}s · 예상 변환 ${(evt.replayMs / 1000).toFixed(0)}s`,
+              })
+            } else if (evt.type === 'progress') {
+              renderStatus({ phase: 'progress', progress: evt })
+            } else if (evt.type === 'log') {
+              appendLog(evt.message)
+            } else if (evt.type === 'done') {
+              es.close()
+              const sizeMb = (evt.size / 1024 / 1024).toFixed(1)
+              renderStatus({
+                phase: 'done',
+                msg: `✅ 완료 · ${sizeMb} MB · ${(evt.wallMs / 1000).toFixed(1)}s 소요`,
+              })
+              const a = document.createElement('a')
+              a.href = evt.downloadUrl
+              a.download = baseName + '.mp4'
+              document.body.appendChild(a)
+              a.click()
+              a.remove()
+              resolve()
+            } else if (evt.type === 'error') {
+              es.close()
+              renderStatus({ phase: 'error', msg: '⚠ ' + evt.message })
+              resolve()
+            }
+          }
+          es.onerror = () => {
+            es.close()
+            renderStatus({ phase: 'error', msg: '⚠ 서버 연결이 끊겼습니다.' })
+            resolve()
+          }
+        })
+      }
+
+      function appendLog(line) {
+        logLines.push(line)
+        logLines = logLines.slice(-8)
+        const el = document.getElementById('log')
+        if (el) el.textContent = logLines.join('\n')
+      }
+
+      function renderStatus({ phase, msg, progress }) {
+        if (phase === 'progress' && progress) {
+          const pct =
+            typeof progress.percent === 'number'
+              ? progress.percent
+              : Math.min(100, (progress.wallMs / progress.replayMs) * 100)
+          statusEl.innerHTML = `
+            <div class="row">⏺ 변환 중 · ${pct.toFixed(0)}% · ${(progress.wallMs / 1000).toFixed(1)}s 경과</div>
+            <div class="bar"><div style="width:${pct}%"></div></div>
+            <pre class="log" id="log"></pre>
+          `
+          const el = document.getElementById('log')
+          if (el) el.textContent = logLines.join('\n')
+          return
+        }
+        const cls = phase === 'error' ? 'err' : phase === 'done' ? 'ok' : ''
+        statusEl.innerHTML = `
+          <div class="row ${cls}">${msg ?? ''}</div>
+          <pre class="log" id="log">${logLines.join('\n')}</pre>
+        `
+      }
+    </script>
+  </body>
+</html>
