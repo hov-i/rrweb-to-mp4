@@ -7,7 +7,6 @@ Sentry replay JSON(rrweb) → MP4 변환기. 백엔드는 Sentry 팀 공식 도�
 ## 설치
 
 ```powershell
-cd C:\Users\HongBi\IdeaProjects\rrweb-to-mp4
 npm install
 ```
 
@@ -25,11 +24,6 @@ npm start
 - **비디오 재생 속도** (1x ~ 16x) — 결과 MP4가 몇 배속으로 재생될지. 변환 시간도 같이 줄어듦.
 - **해상도** (50% / 75% / 100%)
 
-## 2. CLI
-
-```powershell
-node convert.mjs C:\Users\User\Downloads\rrweb.json
-```
 
 옵션:
 
