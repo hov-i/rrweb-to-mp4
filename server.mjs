@@ -12,6 +12,16 @@ const PORT = Number(process.env.PORT) || 3000
 
 const jobs = new Map()
 
+const MAX_SESSION_MS = 15 * 60 * 1000
+const MIN_SPEED = 4
+const MAX_CONCURRENT_JOBS = 1
+
+function countRunningJobs() {
+  let n = 0
+  for (const j of jobs.values()) if (j.status === 'running') n++
+  return n
+}
+
 app.use(express.static(path.join(__dirname, 'public')))
 
 function pushEvent(job, evt) {
@@ -33,7 +43,11 @@ app.post(
   express.raw({ type: '*/*', limit: '500mb' }),
   async (req, res) => {
     try {
-      const speed = Math.max(1, Math.min(32, parseFloat(req.query.speed ?? '4')))
+      if (countRunningJobs() >= MAX_CONCURRENT_JOBS) {
+        return res.status(429).json({ error: '다른 변환이 진행 중입니다. 잠시 후 다시 시도해주세요.' })
+      }
+
+      const speed = Math.max(MIN_SPEED, Math.min(32, parseFloat(req.query.speed ?? '4')))
       const scale = Math.max(0.25, Math.min(1, parseFloat(req.query.scale ?? '0.75')))
       const filename = (req.query.filename || 'replay').toString().replace(/[^\w\-]+/g, '_')
 
@@ -50,6 +64,13 @@ app.post(
       const events = normalizeEvents(raw)
       if (events.length < 2) {
         return res.status(400).json({ error: 'rrweb 이벤트를 찾지 못했습니다.' })
+      }
+
+      const sessionMs = events[events.length - 1].timestamp - events[0].timestamp
+      if (sessionMs > MAX_SESSION_MS) {
+        return res.status(413).json({
+          error: `세션이 너무 깁니다. 최대 ${MAX_SESSION_MS / 60000}분까지 지원합니다. (입력: ${(sessionMs / 60000).toFixed(1)}분)`,
+        })
       }
 
       const id = randomUUID()

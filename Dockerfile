@@ -1,6 +1,7 @@
 # Microsoft 공식 Playwright 이미지 = Chromium + 시스템 의존성 + Node 20 미리 설치됨.
-# 태그는 package-lock의 rrvideo가 요구하는 playwright(^1.56.1)에 맞춤.
-FROM mcr.microsoft.com/playwright:v1.56.1-jammy
+# 태그는 실제로 설치되는 playwright 버전과 정확히 일치해야 함 (Chromium 빌드 ID가 버전마다 다름).
+# 확인: `npm ls playwright` 또는 node_modules/playwright/package.json
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 
 WORKDIR /app
 
