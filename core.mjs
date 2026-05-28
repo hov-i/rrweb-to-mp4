@@ -115,7 +115,8 @@ export async function convertEvents({
 export async function convertEventsSegmented({
   events,
   outPath,
-  segmentMs = 10 * 60 * 1000,
+  segmentMs = 15 * 60 * 1000,
+  segmentThresholdMs,
   speed = 4,
   scale = 0.75,
   workDir,
@@ -123,6 +124,8 @@ export async function convertEventsSegmented({
   onProgress = () => {},
   onLog = () => {},
 } = {}) {
+  // 임계값 미지정 시 segmentMs 와 같이 잡음 (= 항상 분할). 호출자가 명시하면 그 값을 사용.
+  const threshold = segmentThresholdMs ?? segmentMs
   if (!events || events.length < 2) throw new Error('rrweb 이벤트가 부족합니다.')
 
   const meta = events.find((e) => e.type === 4)
@@ -144,8 +147,8 @@ export async function convertEventsSegmented({
 
   onInit({ srcW, srcH, outW, outH, totalMs, replayMs, segments: segCount })
 
-  if (segCount === 1) {
-    onLog('세션이 짧아 단일 변환으로 처리합니다.')
+  if (totalMs <= threshold) {
+    onLog(`세션 ${(totalMs / 60000).toFixed(1)}분 ≤ 임계값 ${threshold / 60000}분 → 단일 변환으로 처리`)
     return await convertEvents({ events, outPath, speed, scale, onInit: () => {}, onProgress, onLog })
   }
 

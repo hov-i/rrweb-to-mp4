@@ -54,13 +54,19 @@ node convert.mjs replay.json out.mp4 --speed 1 --scale 1
 
 ### 전체 변환 파이프라인
 
+세션 길이에 따라 두 경로로 분기됩니다.
+
+- **세션 ≤ 25분** → 단일 변환 (Chromium 1번 부팅, 가장 빠름)
+- **세션 > 25분** → 15분 윈도우 단위 세그먼트 변환 (메모리 안전)
+
 ```mermaid
 flowchart TD
     A[웹 UI: JSON 드롭] -->|POST /jobs| B[server.mjs]
     B --> C{동시 작업 1개<br/>세션 ≤60분?}
     C -->|No| X[429 / 413]
-    C -->|Yes| D[convertEventsSegmented]
-    D --> E[10분 윈도우로 분할]
+    C -->|Yes| D{세션 ≤25분?}
+    D -->|Yes - 빠른 경로| Q[단일 convertEvents<br/>Chromium 1번]
+    D -->|No - 세그먼트 경로| E[15분 윈도우로 분할]
     E --> F[세그먼트 루프]
     F --> G[FullSnapshot부터<br/>이벤트 슬라이스]
     G --> H[Fresh Chromium<br/>+ rrvideo]
@@ -71,9 +77,16 @@ flowchart TD
     K --> L
     L -->|Yes| F
     L -->|No| M[ffmpeg concat]
-    M --> N[최종 MP4]
+    Q --> N[최종 MP4]
+    M --> N
     N -.SSE done.-> A
 ```
+
+### 왜 임계값을 두는가
+
+세그먼트 변환은 Chromium 콜드 부팅(~3초) + rrvideo 초기화가 윈도우마다 반복되므로,
+짧은 세션은 **세그먼트로 쪼개면 오히려 느려집니다**. 25분 이하면 단일 변환이 빠르고
+메모리도 견딜 만하므로 빠른 경로로 갑니다.
 
 ### 세그먼트 슬라이싱 (왜 trim이 필요한가)
 
@@ -84,17 +97,17 @@ flowchart TD
 flowchart TB
     subgraph T["원본 이벤트 타임라인 (예: 1시간)"]
         direction LR
-        S0([📸 t=0]) --> E1[events] --> S1([📸 t=5분])
-        S1 --> E2[events] --> S2([📸 t=12분])
+        S0([📸 t=0]) --> E1[events] --> S1([📸 t=7분])
+        S1 --> E2[events] --> S2([📸 t=18분])
         S2 --> E3[events] --> END[t=60분]
     end
 
-    T --> W2["윈도우 2: 10~20분"]
+    T --> W2["윈도우 2: 15~30분"]
 
-    W2 --> P1[직전 snapshot 찾기<br/>→ t=5분]
-    P1 --> P2[슬라이스:<br/>meta + snap@5분 + ~20분]
-    P2 --> P3[Chromium 변환<br/>15분치 영상]
-    P3 --> P4[ffmpeg -ss 1분15초 trim<br/>10~20분 부분만 남김]
+    W2 --> P1[직전 snapshot 찾기<br/>→ t=18분]
+    P1 --> P2[슬라이스:<br/>meta + snap@18분 + ~30분]
+    P2 --> P3[Chromium 변환<br/>12분치 영상]
+    P3 --> P4[ffmpeg -ss 트림<br/>15~30분 부분만 남김]
     P4 --> P5[seg2.mp4]
 
     style S0 fill:#ffd
@@ -103,7 +116,7 @@ flowchart TB
     style P4 fill:#cfc
 ```
 
-세그먼트마다 **Chromium이 완전히 재시작**되므로 메모리는 한 윈도우 분량으로 한정됩니다. 덕분에 1GB RAM 환경(Railway Trial 등)에서도 긴 세션이 가능합니다.
+세그먼트마다 **Chromium이 완전히 재시작**되므로 메모리는 한 윈도우 분량으로 한정됩니다. 덕분에 1GB RAM 환경(Railway Trial 등)에서도 30분~60분 세션이 가능합니다.
 
 ## 파일 구조
 

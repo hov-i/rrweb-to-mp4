@@ -15,11 +15,29 @@ const jobs = new Map()
 const MAX_CONCURRENT_JOBS = 1
 // 세그먼트 변환으로 RAM은 길이와 무관하게 일정해지므로 hard cap만 남김 (남용/오작동 방지용 안전선)
 const HARD_MAX_SESSION_MS = 60 * 60 * 1000
-const SEGMENT_MS = 10 * 60 * 1000
+// 짧은 세션은 단일 변환이 더 빠름 (세그먼트 부팅 오버헤드 회피).
+// 이 임계값 초과일 때만 분할.
+const SEGMENT_THRESHOLD_MS = 25 * 60 * 1000
+const SEGMENT_MS = 15 * 60 * 1000
+// 변환 중 onProgress 가 STALE_MS 이상 안 오면 hang 으로 간주.
+// (Chromium/rrvideo 가 throw 없이 멈춘 경우를 자동 회수하기 위함)
+const STALE_MS = 5 * 60 * 1000
+const STALE_SWEEP_MS = 30 * 1000
+
+function isJobStale(job, now = Date.now()) {
+  if (job.status !== 'running') return false
+  const lastActivity = job.lastProgressAt ?? job.startedAt
+  return now - lastActivity > STALE_MS
+}
 
 function countRunningJobs() {
+  const now = Date.now()
   let n = 0
-  for (const j of jobs.values()) if (j.status === 'running') n++
+  for (const j of jobs.values()) {
+    if (j.status !== 'running') continue
+    if (isJobStale(j, now)) continue // 멈춘 작업은 슬롯 점유 안 함
+    n++
+  }
   return n
 }
 
@@ -86,6 +104,7 @@ app.post(
         downloadName: `${filename}.mp4`,
         status: 'running',
         startedAt: Date.now(),
+        lastProgressAt: Date.now(),
         lastInit: null,
         lastProgress: null,
         lastDone: null,
@@ -102,16 +121,20 @@ app.post(
         speed,
         scale,
         segmentMs: SEGMENT_MS,
+        segmentThresholdMs: SEGMENT_THRESHOLD_MS,
         workDir: jobDir,
         onInit: (e) => {
+          job.lastProgressAt = Date.now()
           job.lastInit = { type: 'init', ...e }
           pushEvent(job, job.lastInit)
         },
         onProgress: (e) => {
+          job.lastProgressAt = Date.now()
           job.lastProgress = { type: 'progress', ...e }
           pushEvent(job, job.lastProgress)
         },
         onLog: (m) => {
+          job.lastProgressAt = Date.now()
           pushEvent(job, { type: 'log', message: m })
         },
       })
@@ -177,6 +200,25 @@ app.get('/jobs/:id/download', async (req, res) => {
   })
 })
 
+// hang 감지: 진행률 갱신이 STALE_MS 이상 없으면 강제로 error 마킹.
+// (Chromium 자체는 별도 프로세스라 여기서 못 죽이지만, jobs 슬롯은 해제됨)
+setInterval(() => {
+  const now = Date.now()
+  for (const job of jobs.values()) {
+    if (job.status === 'running' && isJobStale(job, now)) {
+      const idle = ((now - (job.lastProgressAt ?? job.startedAt)) / 1000).toFixed(0)
+      console.warn(`[job ${job.id}] ${idle}초간 진행 없음 → stale 처리`)
+      job.status = 'error'
+      job.lastError = {
+        type: 'error',
+        message: `변환이 응답하지 않아 중단되었습니다 (${Math.round(STALE_MS / 60000)}분 이상 진행 없음). 다시 시도해주세요.`,
+      }
+      pushEvent(job, job.lastError)
+    }
+  }
+}, STALE_SWEEP_MS)
+
+// 시작된 지 1시간 지난 job 디렉토리 청소
 setInterval(() => {
   const now = Date.now()
   for (const [id, job] of jobs) {
