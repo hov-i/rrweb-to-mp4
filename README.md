@@ -28,7 +28,7 @@ npm start
 ## 2. CLI
 
 ```powershell
-node convert.mjs C:\Users\HongBi\Downloads\rrweb.json
+node convert.mjs C:\Users\User\Downloads\rrweb.json
 ```
 
 옵션:
